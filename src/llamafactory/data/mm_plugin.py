@@ -78,7 +78,8 @@ if TYPE_CHECKING:
 
     ImageInput = Union[str, bytes, EncodedImage, BinaryIO, ImageObject]
     VideoInput = Union[str, BinaryIO, list[list[ImageInput]]]
-    AudioInput = Union[str, BinaryIO, NDArray]
+    # dict: segment from a long file, e.g. {"path": "...", "start_time": 1.2, "end_time": 9.5}
+    AudioInput = Union[str, BinaryIO, NDArray, dict]
 
     class MMProcessor(ProcessorMixin):
         patch_size: int
@@ -292,13 +293,54 @@ class MMPluginMixin:
 
         return {"videos": results}
 
+    def _audio_dict_to_load_args(self, audio: dict) -> tuple[str, float, Optional[float]]:
+        r"""Resolve path and librosa ``offset`` / ``duration`` (seconds) from a segment dict.
+
+        Supported keys:
+        - ``path`` or string ``audio``: file path
+        - ``offset`` + ``duration``: same as ``librosa.load``
+        - ``start_time`` / ``begin_time`` + ``end_time``: slice ``[start, end)`` in seconds
+        """
+        path = audio.get("path")
+        if path is None and isinstance(audio.get("audio"), str):
+            path = audio["audio"]
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"Audio dict must contain a string 'path' or 'audio' key: {audio!r}")
+
+        offset = 0.0
+        duration: Optional[float] = None
+        if "offset" in audio or "duration" in audio:
+            offset = float(audio.get("offset", 0.0))
+            d = audio.get("duration")
+            duration = float(d) if d is not None else None
+        else:
+            st = audio.get("start_time")
+            if st is None and "begin_time" in audio:
+                st = audio["begin_time"]
+            et = audio.get("end_time")
+            if st is not None:
+                offset = float(st)
+            if et is not None:
+                end_f = float(et)
+                if st is not None:
+                    duration = max(0.0, end_f - offset)
+                else:
+                    duration = end_f
+            elif st is not None:
+                duration = None
+
+        return path, offset, duration
+
     def _regularize_audios(
         self, audios: list["AudioInput"], sampling_rate: float, **kwargs
     ) -> dict[str, Union[list["NDArray"], list[float]]]:
         r"""Regularizes audios to avoid error. Including reading and resampling."""
         results, sampling_rates = [], []
         for audio in audios:
-            if isinstance(audio, (str, BinaryIO)):
+            if isinstance(audio, dict):
+                path, offset, duration = self._audio_dict_to_load_args(audio)
+                audio, sampling_rate = librosa.load(path, sr=sampling_rate, offset=offset, duration=duration)
+            elif isinstance(audio, (str, BinaryIO)):
                 audio, sampling_rate = librosa.load(audio, sr=sampling_rate)
 
             if not isinstance(audio, np.ndarray):

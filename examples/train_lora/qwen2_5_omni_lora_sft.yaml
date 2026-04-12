@@ -24,8 +24,8 @@ dataset_dir: /mnt/workspace/xjz/LlamaFactory/data
 media_dir: /mnt/workspace/xjz/Audios_Datasets/WenetSpeech/DATA_UNTAR_DIRECTORY
 template: qwen2_omni
 cutoff_len: 8192
-max_samples: 100  # 仅调试时取消注释，全量训练不要设
-overwrite_cache: true
+# max_samples: 100  # 仅调试时取消注释，全量训练不要设
+overwrite_cache: false
 # 多卡+CUDA 已初始化后，num_proc>1 的 map 易死锁/长期 0%；先保持 1；缓存生成后可再改小测试
 preprocessing_num_workers: 16
 # 默认 1000：qwen2_omni 在 expand_mm_tokens 下每条要读音频并跑 feature_extractor，一批=1000 会极慢且进度条在完成该批前一直 0%
@@ -61,7 +61,6 @@ bf16: true
 ddp_timeout: 180000000
 # 从头训练：保持 null；续训时改为 checkpoint 目录路径
 resume_from_checkpoint: null
-
 ### eval（从训练集划出验证子集；不需要验证可再全部注释并去掉 val_size）
 val_size: 0.02
 per_device_eval_batch_size: 1

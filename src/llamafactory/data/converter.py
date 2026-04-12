@@ -61,6 +61,24 @@ class DatasetConverter:
                         logger.warning_rank0_once(
                             f"Media {medias[i]} does not exist in `media_dir`. Use original path."
                         )
+            elif isinstance(medias[0], dict):  # audio segment: path + start_time/end_time, etc.
+                for i in range(len(medias)):
+                    item = dict(medias[i])
+                    rel = item.get("path")
+                    if rel is None and isinstance(item.get("audio"), str):
+                        rel = item["audio"]
+                    if isinstance(rel, str):
+                        media_path = os.path.join(self.data_args.media_dir, rel)
+                        if os.path.isfile(media_path):
+                            item["path"] = media_path
+                        elif os.path.isfile(rel):
+                            item["path"] = os.path.abspath(rel)
+                        else:
+                            item["path"] = rel
+                            logger.warning_rank0_once(
+                                f"Media {rel} does not exist in `media_dir`. Use original path."
+                            )
+                    medias[i] = item
             elif isinstance(medias[0], list):  # for processed video frames
                 # medias is a list of lists, e.g., [[frame1.jpg, frame2.jpg], [frame3.jpg, frame4.jpg]]
                 for i in range(len(medias)):

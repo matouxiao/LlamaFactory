@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 # 未设置时默认用物理 4–7；若已在环境中 export 过则尊重现有值
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-5,6,7}"
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 # 避免 tokenizer 再开多进程，与 DDP/CUDA 叠加时易卡住
 export TOKENIZERS_PARALLELISM=false
 
