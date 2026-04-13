@@ -619,6 +619,14 @@ def get_template_and_fix_tokenizer(tokenizer: "PreTrainedTokenizer", data_args: 
     template.enable_thinking = data_args.enable_thinking
     template.fix_special_tokens(tokenizer)
     template.fix_jinja_template(tokenizer)
+    # Qwen2.5-Omni Thinker + Flash Attention: batched forward/eval raises if padding_side is right.
+    # See model error: "call tokenizer.padding_side = 'left' before tokenizing the input".
+    if data_args.template == "qwen2_omni":
+        tokenizer.padding_side = "left"
+        if getattr(tokenizer, "init_kwargs", None) is not None:
+            tokenizer.init_kwargs["padding_side"] = "left"
+        logger.info_rank0("Set `tokenizer.padding_side` to `left` for Qwen2.5-Omni (Flash Attention).")
+
     return template
 
 
