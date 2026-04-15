@@ -1,0 +1,62 @@
+# 自动跑完测试集 data/demo.jsonl（dataset_info 里名称 demo），无需手动逐条输入。
+# LlamaFactory 的 predict 与 train 共用入口，此处 do_train=false，只生成预测。
+#
+# 一键（推荐）：
+#   cd /mnt/workspace/xjz/LlamaFactory && bash examples/inference/run_demo_jsonl_predict.sh
+# 或：
+#   CUDA_VISIBLE_DEVICES=0 llamafactory-cli train examples/inference/qwen2_5_omni_lora_predict_demo.yaml
+#
+# 输出：output_dir 下 generated_predictions.jsonl；可与 labels 算相似度等指标。
+#
+# 「半天没输出」：predict 阶段 HuggingFace Trainer 在**每条生成完成前**往往不打进度条。
+# demo 里单段音频约 100s，Omni 要先做**音频编码**再**逐 token 解码**，首条在 7B+ 上常见要**数分钟～十几分钟**。
+# 可用 nvidia-smi 看 GPU 利用率/显存是否在动，确认未卡死。
+# 想快速验证能否出字：可暂时把下面 max_new_tokens 改成 256～512（输出会截断，仅作冒烟）。
+#
+# 「输出被截断」：若 cutoff_len 过小（如 8192），长音频对应的 <|AUDIO|> token 会占满上下文，
+# generation_max_length 默认等于 cutoff_len，导致**可生成长度 ≈ 8192 − prompt 长度**，远小于 max_new_tokens。
+# 解决：将 cutoff_len / generation_max_length 提到与模型一致（本配置 32768，与 Qwen2.5-Omni 一致）。
+
+### model
+model_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni
+adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft/checkpoint-6128
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: false
+do_eval: false
+do_predict: true
+finetuning_type: lora
+
+### dataset
+eval_dataset: demo
+dataset_dir: /mnt/workspace/xjz/LlamaFactory/data
+media_dir: /mnt/workspace/xjz/Audios_Datasets/WenetSpeech/DATA_UNTAR_DIRECTORY
+template: qwen2_omni
+# 与 Qwen2.5-Omni max_position_embeddings 对齐；勿用 8192，否则长音频 prompt 挤占后生成极短、易截断
+cutoff_len: 16384
+max_samples: 10
+overwrite_cache: true
+preprocessing_num_workers: 4
+preprocessing_batch_size: 8
+dataloader_num_workers: 2
+
+### output
+output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/predict_demo
+overwrite_output_dir: true
+report_to: none
+
+### eval
+per_device_eval_batch_size: 1
+predict_with_generate: true
+ddp_timeout: 180000000
+# 见文件头注释：须足够大，否则 Trainer 用「总长 8192」卡生成，predict 会在中途断句
+generation_max_length: 16384
+
+### generation（解码参数；与默认相比略增大上限，避免长 thinking 过早截断）
+max_new_tokens: 8192
+do_sample: true
+temperature: 0.7
+top_p: 0.9

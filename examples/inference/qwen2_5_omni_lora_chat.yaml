@@ -1,0 +1,20 @@
+# 命令行交互（llamafactory-cli chat）：仅文本多轮对话，不会附加音频。
+# 官方 CLI 的 run_chat 未实现「传 audios」，Qwen2.5-Omni 纠错请用同目录脚本：
+#   python examples/inference/omni_lora_chat_cli.py examples/inference/qwen2_5_omni_lora_chat.yaml
+#
+# 若仅需纯文本试模型（无音频），可：
+#   cd /mnt/workspace/xjz/LlamaFactory
+#   CUDA_VISIBLE_DEVICES=0 llamafactory-cli chat examples/inference/qwen2_5_omni_lora_chat.yaml
+
+### model
+model_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni
+adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft/checkpoint-6128
+trust_remote_code: true
+flash_attn: fa2
+finetuning_type: lora
+
+### inference
+template: qwen2_omni
+infer_backend: huggingface
+media_dir: /mnt/workspace/xjz/Audios_Datasets/WenetSpeech/DATA_UNTAR_DIRECTORY
+cutoff_len: 8192

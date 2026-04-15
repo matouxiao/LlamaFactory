@@ -12,8 +12,10 @@ flash_attn: fa2
 stage: sft
 do_train: true
 finetuning_type: lora
-lora_rank: 8
-lora_target: all
+lora_rank: 128
+lora_alpha: 256
+use_dora: true
+lora_target: q_proj,v_proj,k_proj,o_proj,gate_proj,up_proj,down_proj
 
 ### dataset
 # 数据须在 user 侧文本中含与音频条数一致的 <audio> 占位（默认在 prompt 首行，见 make_data/add_audio_placeholder_jsonl.py）
@@ -29,20 +31,21 @@ overwrite_cache: false
 # 多卡+CUDA 已初始化后，num_proc>1 的 map 易死锁/长期 0%；先保持 1；缓存生成后可再改小测试
 preprocessing_num_workers: 16
 # 默认 1000：qwen2_omni 在 expand_mm_tokens 下每条要读音频并跑 feature_extractor，一批=1000 会极慢且进度条在完成该批前一直 0%
-preprocessing_batch_size: 8
+preprocessing_batch_size: 200
 dataloader_num_workers: 4
 
 ### output
-output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft
+output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora
 logging_steps: 10
 # 每轮结束保存：save_strategy=epoch（HF 无 save_epochs 字段，勿写）
 # 每 0.5 个 epoch 存一次：改为 save_strategy: steps，save_steps ≈ steps_per_epoch/2
 # 当前约 49000 训练样本、4 卡、per_device×accum×卡=32 → 约 1532 步/epoch → 半轮≈766（若改 batch/卡数请重算）
-save_strategy: epoch
+save_strategy: steps
+save_steps: 766
 plot_loss: true
 # 从头训练用 true 会覆盖同目录旧 checkpoint；续训时改为 false 并设 resume_from_checkpoint
 overwrite_output_dir: true
-save_only_model: false
+save_only_model: true
 # 与 use_swanlab 不要同时用 report_to: swanlab：HF 内置 SwanLab 会忽略下方 swanlab_project，项目名常变成当前目录名（如 llamafactory）
 report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
 use_swanlab: true
