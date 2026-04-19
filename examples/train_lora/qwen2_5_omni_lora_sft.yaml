@@ -19,7 +19,7 @@ lora_target: q_proj,v_proj,k_proj,o_proj,gate_proj,up_proj,down_proj
 
 ### dataset
 # 数据须在 user 侧文本中含与音频条数一致的 <audio> 占位（默认在 prompt 首行，见 make_data/add_audio_placeholder_jsonl.py）
-dataset: correct_model
+dataset: correct_model_reading
 # 须指向含 dataset_info.json 的目录；用相对路径时请先 cd 到 LlamaFactory 仓库根目录再启动训练
 dataset_dir: /mnt/workspace/xjz/LlamaFactory/data
 # jsonl 中 audio 为相对路径（如 audio/train/...），此处填「含 audio/ 目录」的磁盘根路径
@@ -32,7 +32,7 @@ overwrite_cache: false
 preprocessing_num_workers: 16
 # 默认 1000：qwen2_omni 在 expand_mm_tokens 下每条要读音频并跑 feature_extractor，一批=1000 会极慢且进度条在完成该批前一直 0%
 preprocessing_batch_size: 200
-dataloader_num_workers: 4
+dataloader_num_workers: 64
 
 ### output
 output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora
@@ -45,12 +45,12 @@ save_steps: 766
 plot_loss: true
 # 从头训练用 true 会覆盖同目录旧 checkpoint；续训时改为 false 并设 resume_from_checkpoint
 overwrite_output_dir: true
-save_only_model: true
+save_only_model: false
 # 与 use_swanlab 不要同时用 report_to: swanlab：HF 内置 SwanLab 会忽略下方 swanlab_project，项目名常变成当前目录名（如 llamafactory）
 report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
 use_swanlab: true
 swanlab_api_key: cVNLlDt9PJNe6I9nkSv9W
-swanlab_project: correct_model
+swanlab_project: correct_model_reading
 
 ### train
 # 约 63/97GB 有余量时可试 2+4 累积：等效 batch=2×4卡×4=32（与原 1×4×8 相同）；OOM 则改回 1+8
