@@ -17,6 +17,8 @@
 
 import json
 import os
+import re
+import time
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -28,6 +30,7 @@ from typing_extensions import override
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
 from ...extras.packages import is_transformers_version_greater_than
+from ...extras.misc import predict_timing_current_batch
 from ..callbacks import SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
 
@@ -120,9 +123,33 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         else:
             labels = inputs.get("labels")
 
+        do_predict_timing = self.args.do_predict
+        if do_predict_timing:
+            t_ps0 = time.perf_counter()
+            iids = inputs.get("input_ids")
+            prompt_len = int(iids.shape[-1]) if iids is not None else -1
+            bsz = int(iids.shape[0]) if iids is not None else -1
+            in_keys = sorted(inputs.keys())
+
         loss, generated_tokens, _ = super().prediction_step(
             model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys, **gen_kwargs
         )
+        if do_predict_timing:
+            t_ps1 = time.perf_counter()
+            bid = predict_timing_current_batch()
+            gen_shape = tuple(generated_tokens.shape) if generated_tokens is not None else ()
+            gen_len = int(gen_shape[-1]) if len(gen_shape) >= 2 else 0
+            wall = t_ps1 - t_ps0
+            approx_new_positions = max(gen_len - prompt_len, 1)
+            wall_per_pos = wall / approx_new_positions
+            logger.info_rank0(
+                "[predict-timing] prediction_step (prefill+decode 合计，单次 generate): "
+                f"batch_id={bid} batch_size={bsz} prompt_len={prompt_len} generated_seq_len={gen_len} "
+                f"wall_s={wall:.3f} wall_s_per_new_token_slot≈{wall_per_pos:.4f} "
+                f"(首步含整段提示预填与首 token，后续为自回归解码；HF 未暴露更细粒度) "
+                f"input_keys={in_keys}"
+            )
+
         if generated_tokens is not None and self.args.predict_with_generate:
             generated_tokens[:, : inputs["input_ids"].size(-1)] = self.processing_class.pad_token_id
             generated_tokens = generated_tokens.contiguous()
@@ -160,6 +187,23 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         decoded_preds = self.processing_class.batch_decode(preds, skip_special_tokens=skip_special_tokens)
         decoded_labels = self.processing_class.batch_decode(labels, skip_special_tokens=skip_special_tokens)
 
+        def _shrink_mm_placeholders(text: str) -> str:
+            for bos, eos, ph in (
+                ("<|audio_bos|>", "<|audio_eos|>", "<|AUDIO|>"),
+                ("<|vision_bos|>", "<|vision_eos|>", "<|IMAGE|>"),
+                ("<|vision_bos|>", "<|vision_eos|>", "<|VIDEO|>"),
+            ):
+                pattern = re.compile(re.escape(bos) + r"(.*?)" + re.escape(eos), re.DOTALL)
+
+                def _repl(m: "re.Match[str]") -> str:
+                    inner = m.group(1)
+                    n = inner.count(ph)
+                    return f"{bos}{ph} x{n}{eos}" if n else f"{bos}{eos}"
+
+                text = pattern.sub(_repl, text)
+            return text
+
         with open(output_prediction_file, "w", encoding="utf-8") as f:
             for text, pred, label in zip(decoded_inputs, decoded_preds, decoded_labels):
+                text = _shrink_mm_placeholders(text)
                 f.write(json.dumps({"prompt": text, "predict": pred, "label": label}, ensure_ascii=False) + "\n")

@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -25,7 +26,12 @@ from peft import PeftModel
 from transformers import DataCollatorForSeq2Seq
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER
+from ..extras.logging import get_logger
+from ..extras.misc import predict_timing_new_batch
 from ..extras.packages import is_pillow_available
+
+
+logger = get_logger(__name__)
 
 
 if is_pillow_available():
@@ -90,6 +96,7 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
     template: Optional["Template"] = None
     processor: Optional["ProcessorMixin"] = None
+    log_mm_collator_timing: bool = False
 
     def __post_init__(self):
         if self.template is None:
@@ -106,6 +113,8 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             self.get_rope_func = None
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
+        t_collator_start = time.perf_counter() if self.log_mm_collator_timing else 0.0
+        predict_batch_id = predict_timing_new_batch() if self.log_mm_collator_timing else -1
         batch_images, batch_videos, batch_audios = [], [], []
         batch_imglens, batch_vidlens, batch_audlens, batch_input_ids = [], [], [], []
         for feature in features:
@@ -165,6 +174,7 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
             batch_input_ids[0] = features[0]["input_ids"]
 
+        t_before_mm = time.perf_counter() if self.log_mm_collator_timing else 0.0
         mm_inputs = self.template.mm_plugin.get_mm_inputs(
             batch_images,
             batch_videos,
@@ -175,12 +185,15 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             batch_input_ids,
             self.processor,
         )
+        t_after_mm = time.perf_counter() if self.log_mm_collator_timing else 0.0
+        mm_keys_snapshot = list(mm_inputs.keys()) if self.log_mm_collator_timing else []
         if "token_type_ids" in mm_inputs:
             token_type_ids = mm_inputs.pop("token_type_ids")
             for i, feature in enumerate(features):
                 feature["token_type_ids"] = token_type_ids[i]
 
         features: dict[str, torch.Tensor] = super().__call__(features)
+        t_after_pad = time.perf_counter() if self.log_mm_collator_timing else 0.0
 
         if self.get_rope_func is not None:
             rope_index_kwargs = {
@@ -222,6 +235,23 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             mm_inputs["cross_attention_mask"] = F.pad(cross_attention_mask, (0, 0, 0, 0, 0, seq_len - orig_len))
 
         features.update(mm_inputs)
+        t_after_rope = time.perf_counter() if self.log_mm_collator_timing else 0.0
+
+        if self.log_mm_collator_timing:
+            bsz, seq_len = features["input_ids"].shape[0], features["input_ids"].shape[1]
+            preview = mm_keys_snapshot[:12]
+            ellip = "..." if len(mm_keys_snapshot) > 12 else ""
+            logger.info_rank0(
+                "[predict-timing] collator: "
+                f"batch_id={predict_batch_id} "
+                f"batch_size={bsz} seq_len={seq_len} "
+                f"n_img={sum(batch_imglens)} n_vid={sum(batch_vidlens)} n_aud={sum(batch_audlens)} "
+                f"get_mm_inputs_s={t_after_mm - t_before_mm:.3f} "
+                f"seq2seq_pad_s={t_after_pad - t_after_mm:.3f} "
+                f"rope_merge_mm_s={t_after_rope - t_after_pad:.3f} "
+                f"total_s={t_after_rope - t_collator_start:.3f} "
+                f"mm_keys={preview}{ellip}"
+            )
 
         if "image_bound" in features:  # for minicpmv inputs
             bsz, seq_length = features["input_ids"].shape

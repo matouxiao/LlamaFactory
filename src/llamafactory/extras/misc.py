@@ -307,3 +307,22 @@ def fix_proxy(ipv6_enabled: bool = False) -> None:
     if ipv6_enabled:
         for name in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
             os.environ.pop(name, None)
+
+
+# do_predict 时 collator / mm_plugin / trainer 共用，便于对齐「每条样本」日志
+_predict_timing_batch_id: int = 0
+
+
+def reset_predict_timing_batch_id() -> None:
+    global _predict_timing_batch_id
+    _predict_timing_batch_id = 0
+
+
+def predict_timing_new_batch() -> int:
+    global _predict_timing_batch_id
+    _predict_timing_batch_id += 1
+    return _predict_timing_batch_id
+
+
+def predict_timing_current_batch() -> int:
+    return _predict_timing_batch_id

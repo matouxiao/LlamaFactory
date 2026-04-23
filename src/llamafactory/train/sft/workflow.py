@@ -15,12 +15,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from typing import TYPE_CHECKING, Optional
 
 from ...data import SFTDataCollatorWith4DAttentionMask, get_dataset, get_template_and_fix_tokenizer
 from ...extras.constants import IGNORE_INDEX
 from ...extras.logging import get_logger
-from ...extras.misc import calculate_tps
+from ...extras.misc import calculate_tps, reset_predict_timing_batch_id
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
@@ -62,6 +63,7 @@ def run_sft(
         block_diag_attn=model_args.block_diag_attn,
         attn_implementation=getattr(model.config, "_attn_implementation", None),
         compute_dtype=model_args.compute_dtype,
+        log_mm_collator_timing=training_args.do_predict,
         **tokenizer_module,
     )
 
@@ -126,10 +128,29 @@ def run_sft(
     # Predict
     if training_args.do_predict:
         logger.warning_rank0_once("Batch generation can be very slow. Consider using `scripts/vllm_infer.py` instead.")
-        predict_results = trainer.predict(dataset_module["eval_dataset"], metric_key_prefix="predict", **gen_kwargs)
+        eval_ds = dataset_module["eval_dataset"]
+        try:
+            ds_len = len(eval_ds)
+        except TypeError:
+            ds_len = "unknown"
+        logger.info_rank0(
+            f"[predict-timing] entering trainer.predict: eval_dataset len={ds_len}, "
+            f"per_device_eval_batch_size={training_args.per_device_eval_batch_size}, "
+            f"dataloader_num_workers={training_args.dataloader_num_workers}"
+        )
+        reset_predict_timing_batch_id()
+        setattr(template.mm_plugin, "_lf_infer_step_timing", True)
+        t_pred0 = time.perf_counter()
+        predict_results = trainer.predict(eval_ds, metric_key_prefix="predict", **gen_kwargs)
+        t_pred1 = time.perf_counter()
+        setattr(template.mm_plugin, "_lf_infer_step_timing", False)
+        logger.info_rank0(f"[predict-timing] trainer.predict finished: wall_s={t_pred1 - t_pred0:.3f}")
         trainer.log_metrics("predict", predict_results.metrics)
         trainer.save_metrics("predict", predict_results.metrics)
-        trainer.save_predictions(dataset_module["eval_dataset"], predict_results, generating_args.skip_special_tokens)
+        t_save0 = time.perf_counter()
+        trainer.save_predictions(eval_ds, predict_results, generating_args.skip_special_tokens)
+        t_save1 = time.perf_counter()
+        logger.info_rank0(f"[predict-timing] save_predictions finished: wall_s={t_save1 - t_save0:.3f}")
 
     # Create model card
     create_modelcard_and_push(trainer, model_args, data_args, training_args, finetuning_args)

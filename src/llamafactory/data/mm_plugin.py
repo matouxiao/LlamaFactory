@@ -19,6 +19,7 @@ import inspect
 import math
 import os
 import re
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from io import BytesIO
@@ -30,12 +31,16 @@ from transformers.image_utils import get_image_size, is_valid_image, to_numpy_ar
 from typing_extensions import override
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, VIDEO_PLACEHOLDER
+from ..extras.logging import get_logger
+from ..extras.misc import predict_timing_current_batch
 from ..extras.packages import (
     is_librosa_available,
     is_pillow_available,
     is_pyav_available,
     is_transformers_version_greater_than,
 )
+
+logger = get_logger(__name__)
 
 
 if is_librosa_available():
@@ -1555,15 +1560,23 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
         image_processor: BaseImageProcessor = getattr(processor, "image_processor", None)
         feature_extractor: SequenceFeatureExtractor = getattr(processor, "feature_extractor", None)
         mm_inputs = {}
+        step_timing = getattr(self, "_lf_infer_step_timing", False)
+        batch_id = predict_timing_current_batch() if step_timing else -1
+        img_s = vid_s = audio_reg_s = audio_fe_s = 0.0
+
         if len(images) != 0:
+            t0 = time.perf_counter() if step_timing else 0.0
             images = self._regularize_images(
                 images,
                 image_max_pixels=getattr(processor, "image_max_pixels", 768 * 768),
                 image_min_pixels=getattr(processor, "image_min_pixels", 32 * 32),
             )["images"]
             mm_inputs.update(image_processor(images, return_tensors="pt"))
+            if step_timing:
+                img_s = time.perf_counter() - t0
 
         if len(videos) != 0:
+            t0 = time.perf_counter() if step_timing else 0.0
             video_dict = self._regularize_videos(
                 videos,
                 image_max_pixels=getattr(processor, "video_max_pixels", 256 * 256),
@@ -1576,12 +1589,18 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
             mm_inputs["video_second_per_grid"] = torch.tensor(
                 [temporal_patch_size / fps for fps in video_dict["fps_per_video"]]
             )
+            if step_timing:
+                vid_s = time.perf_counter() - t0
 
         if len(audios) != 0:
+            t_reg = time.perf_counter() if step_timing else 0.0
             audios = self._regularize_audios(
                 audios,
                 sampling_rate=getattr(processor, "audio_sampling_rate", 16000),
             )["audios"]
+            if step_timing:
+                audio_reg_s = time.perf_counter() - t_reg
+            t_fe = time.perf_counter() if step_timing else 0.0
             mm_inputs.update(
                 feature_extractor(
                     audios,
@@ -1591,7 +1610,18 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
                     return_tensors="pt",
                 )
             )
+            if step_timing:
+                audio_fe_s = time.perf_counter() - t_fe
             mm_inputs["feature_attention_mask"] = mm_inputs.pop("attention_mask")  # prevent conflicts
+
+        if step_timing and (len(images) != 0 or len(videos) != 0 or len(audios) != 0):
+            logger.info_rank0(
+                "[predict-timing] mm_plugin(Qwen2Omni) encode: "
+                f"batch_id={batch_id} n_img={len(images)} n_vid={len(videos)} n_aud={len(audios)} "
+                f"image_encode_s={img_s:.3f} video_encode_s={vid_s:.3f} "
+                f"audio_regularize_s={audio_reg_s:.3f} audio_feature_extractor_s={audio_fe_s:.3f} "
+                f"audio_total_s={audio_reg_s + audio_fe_s:.3f}"
+            )
 
         return mm_inputs
 
