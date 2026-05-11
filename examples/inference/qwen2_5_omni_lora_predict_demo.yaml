@@ -16,12 +16,23 @@
 # 「输出被截断」：若 cutoff_len 过小（如 8192），长音频对应的 <|AUDIO|> token 会占满上下文，
 # generation_max_length 默认等于 cutoff_len，导致**可生成长度 ≈ 8192 − prompt 长度**，远小于 max_new_tokens。
 # 解决：将 cutoff_len / generation_max_length 提到与模型一致（本配置 32768，与 Qwen2.5-Omni 一致）。
+#
+# ── 推理耗时日志（do_predict=true 时自动开启）──
+# 终端 / output_dir/running_log.txt 搜前缀 [predict-timing]；同一条样本用 batch_id 对齐。
+# 单条顺序大致为：
+#   1) mm_plugin(Qwen2Omni) encode：image_encode_s / video_encode_s /
+#      audio_regularize_s（读轨、重采样等）/ audio_feature_extractor_s（声学编码）
+#   2) collator：get_mm_inputs_s（含上面 encode + 其它 mm 合并）、seq2seq_pad_s、rope_merge_mm_s、total_s
+#   3) prediction_step：一次 model.generate 的 wall_s（提示预填 + 自回归解码合计；HF 未拆更细）
+#      另有 wall_s_per_new_token_slot≈ 作粗参考
+#   4) trainer.predict / save_predictions：整段循环与写盘
+# 若看不到 INFO：export LLAMAFACTORY_VERBOSITY=INFO（或 DEBUG）
 
 ### model
 model_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni
-adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft/checkpoint-6128
+adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora_no429_noconflict2/checkpoint-2235
 trust_remote_code: true
-flash_attn: fa2
+flash_attn: sdpa  # 在 PPU-ZW810E 上经实测：SDPA 比 FA2 还快 ~15%（NVIDIA 上反过来）
 
 ### method
 stage: sft
@@ -31,13 +42,13 @@ do_predict: true
 finetuning_type: lora
 
 ### dataset
-eval_dataset: demo
+eval_dataset: test
 dataset_dir: /mnt/workspace/xjz/LlamaFactory/data
 media_dir: /mnt/workspace/xjz/Audios_Datasets/WenetSpeech/DATA_UNTAR_DIRECTORY
 template: qwen2_omni
 # 与 Qwen2.5-Omni max_position_embeddings 对齐；勿用 8192，否则长音频 prompt 挤占后生成极短、易截断
 cutoff_len: 16384
-max_samples: 10
+max_samples: 5
 overwrite_cache: true
 preprocessing_num_workers: 4
 preprocessing_batch_size: 8
@@ -56,7 +67,7 @@ ddp_timeout: 180000000
 generation_max_length: 16384
 
 ### generation（解码参数；与默认相比略增大上限，避免长 thinking 过早截断）
-max_new_tokens: 8192
+max_new_tokens: 2048
 do_sample: true
 temperature: 0.7
 top_p: 0.9

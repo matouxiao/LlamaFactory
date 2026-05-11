@@ -10,5 +10,5 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-7}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2}"
 exec llamafactory-cli train examples/inference/qwen2_5_omni_lora_predict_demo.yaml
