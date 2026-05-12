@@ -16,6 +16,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -42,6 +46,13 @@ if is_nltk_available():
 
 if is_rouge_available():
     from rouge_chinese import Rouge  # type: ignore
+
+
+ANSWER_PATTERN = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+USER_PATTERN = re.compile(
+    r"<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n",
+    re.DOTALL,
+)
 
 
 def eval_logit_processor(logits: "torch.Tensor", labels: "torch.Tensor") -> "torch.Tensor":
@@ -132,3 +143,86 @@ class ComputeSimilarity:
 
         if compute_result:
             return self._dump()
+
+
+def _compute_text_similarity(pred: str, label: str) -> dict[str, float]:
+    hypothesis = list(jieba.cut(pred))
+    reference = list(jieba.cut(label))
+
+    if len(" ".join(hypothesis).split()) == 0 or len(" ".join(reference).split()) == 0:
+        result = {"rouge-1": {"f": 0.0}, "rouge-2": {"f": 0.0}, "rouge-l": {"f": 0.0}}
+    else:
+        rouge = Rouge()
+        scores = rouge.get_scores(" ".join(hypothesis), " ".join(reference))
+        result = scores[0]
+
+    metric_result = {}
+    for k, v in result.items():
+        metric_result[k] = round(v["f"] * 100, 4)
+
+    bleu_score = sentence_bleu([list(label)], list(pred), smoothing_function=SmoothingFunction().method3)
+    metric_result["bleu-4"] = round(bleu_score * 100, 4)
+    return metric_result
+
+
+def _extract_answer(text: str) -> str:
+    matched = ANSWER_PATTERN.search(text)
+    return matched.group(1).strip() if matched is not None else text.strip()
+
+
+def _extract_raw_query(prompt: str) -> str:
+    matched = USER_PATTERN.search(prompt)
+    user_block = matched.group(1).strip() if matched is not None else prompt.strip()
+    lines = [line for line in user_block.splitlines() if line.strip()]
+
+    if lines and (lines[0].startswith("<|audio_bos|>") or lines[0].startswith("<audio>")):
+        lines = lines[1:]
+
+    if lines and ("<thinking>" in lines[0] or "<answer>" in lines[0] or "纠错" in lines[0]):
+        lines = lines[1:]
+
+    return "\n".join(lines).strip()
+
+
+def _strip_punctuation(text: str) -> str:
+    return "".join(char for char in text if not unicodedata.category(char).startswith(("P", "S")))
+
+
+def _average_metric_dict(metric_dicts: list[dict[str, float]]) -> dict[str, float]:
+    if not metric_dicts:
+        return {}
+
+    return {key: float(np.mean([metric[key] for metric in metric_dicts])) for key in metric_dicts[0].keys()}
+
+
+def compute_correction_metrics_from_jsonl(prediction_file: str) -> dict[str, float]:
+    r"""Compute answer-only no-punctuation metrics and raw-ASR baseline from generated predictions."""
+    if not os.path.isfile(prediction_file):
+        return {}
+
+    before_metrics = []
+    after_metrics = []
+    sample_count = 0
+
+    with open(prediction_file, "r", encoding="utf-8") as f:
+        for line in f:
+            sample = json.loads(line)
+            before = _strip_punctuation(_extract_raw_query(sample["prompt"]))
+            after = _strip_punctuation(_extract_answer(sample["predict"]))
+            label = _strip_punctuation(_extract_answer(sample["label"]))
+
+            before_metrics.append(_compute_text_similarity(before, label))
+            after_metrics.append(_compute_text_similarity(after, label))
+            sample_count += 1
+
+    before_result = _average_metric_dict(before_metrics)
+    after_result = _average_metric_dict(after_metrics)
+    metric_names = tuple(before_result.keys())
+
+    result = {"predict_answer_no_punct_samples": float(sample_count)}
+    for metric_name in metric_names:
+        result[f"predict_before_correction_no_punct_{metric_name}"] = before_result[metric_name]
+        result[f"predict_answer_no_punct_{metric_name}"] = after_result[metric_name]
+        result[f"predict_improvement_no_punct_{metric_name}"] = after_result[metric_name] - before_result[metric_name]
+
+    return result

@@ -25,7 +25,7 @@ from ...extras.misc import calculate_tps, reset_predict_timing_batch_id
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
-from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
+from .metric import ComputeAccuracy, ComputeSimilarity, compute_correction_metrics_from_jsonl, eval_logit_processor
 from .trainer import CustomSeq2SeqTrainer
 
 
@@ -145,12 +145,18 @@ def run_sft(
         t_pred1 = time.perf_counter()
         setattr(template.mm_plugin, "_lf_infer_step_timing", False)
         logger.info_rank0(f"[predict-timing] trainer.predict finished: wall_s={t_pred1 - t_pred0:.3f}")
-        trainer.log_metrics("predict", predict_results.metrics)
-        trainer.save_metrics("predict", predict_results.metrics)
         t_save0 = time.perf_counter()
         trainer.save_predictions(eval_ds, predict_results, generating_args.skip_special_tokens)
         t_save1 = time.perf_counter()
         logger.info_rank0(f"[predict-timing] save_predictions finished: wall_s={t_save1 - t_save0:.3f}")
+        prediction_file = f"{training_args.output_dir}/generated_predictions.jsonl"
+        try:
+            predict_results.metrics.update(compute_correction_metrics_from_jsonl(prediction_file))
+        except Exception as exc:
+            logger.warning_rank0(f"Failed to compute custom correction metrics from {prediction_file}: {exc}")
+
+        trainer.log_metrics("predict", predict_results.metrics)
+        trainer.save_metrics("predict", predict_results.metrics)
 
     # Create model card
     create_modelcard_and_push(trainer, model_args, data_args, training_args, finetuning_args)

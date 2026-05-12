@@ -1,5 +1,6 @@
 # 自动跑完测试集 data/demo.jsonl（dataset_info 里名称 demo），无需手动逐条输入。
 # LlamaFactory 的 predict 与 train 共用入口，此处 do_train=false，只生成预测。
+# 这是“单 checkpoint”模板；若要批量测多个 checkpoint，请用 examples/inference/run_demo_jsonl_predict_multi_ckpt.sh
 #
 # 一键（推荐）：
 #   cd /mnt/workspace/xjz/LlamaFactory && bash examples/inference/run_demo_jsonl_predict.sh
