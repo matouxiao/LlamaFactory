@@ -13,6 +13,17 @@
 #   CKPT_ROOT=/mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora_no429_noconflict2
 #   OUTPUT_ROOT=/mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/predict_batch
 #   CHECKPOINTS=checkpoint-447,checkpoint-894,checkpoint-1341
+#   # 仅扫描某个 step 区间内的 checkpoint（CHECKPOINTS 未设置时生效）：
+#   CKPT_STEP_MIN=307
+#   CKPT_STEP_MAX=3070
+#
+# 示例：跑 sft_dora_ge85_wash_noconflict 下 step 307~3070 的所有 checkpoint，结果落到 predict_batch_1：
+#   cd /mnt/workspace/xjz/LlamaFactory
+#   CUDA_VISIBLE_DEVICES=2 \
+#   CKPT_ROOT=/mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora_ge85_wash_noconflict \
+#   OUTPUT_ROOT=/mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/predict_batch_1 \
+#   CKPT_STEP_MIN=307 CKPT_STEP_MAX=3070 \
+#   bash examples/inference/run_demo_jsonl_predict_multi_ckpt.sh
 
 set -euo pipefail
 
@@ -51,6 +62,8 @@ BASE_OUTPUT_DIR="${yaml_defaults[1]}"
 CKPT_ROOT="${CKPT_ROOT:-$(dirname "$BASE_ADAPTER_PATH")}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$(dirname "$BASE_OUTPUT_DIR")/predict_batch}"
 CHECKPOINTS="${CHECKPOINTS:-}"
+CKPT_STEP_MIN="${CKPT_STEP_MIN:-}"
+CKPT_STEP_MAX="${CKPT_STEP_MAX:-}"
 
 mkdir -p "$OUTPUT_ROOT"
 
@@ -69,12 +82,18 @@ if [[ -n "$CHECKPOINTS" ]]; then
 else
   while IFS= read -r ckpt_path; do
     ckpt_paths+=("$ckpt_path")
-  done < <(python3 - <<'PY' "$CKPT_ROOT"
+  done < <(python3 - <<'PY' "$CKPT_ROOT" "$CKPT_STEP_MIN" "$CKPT_STEP_MAX"
 import os
 import re
 import sys
 
 root = sys.argv[1]
+raw_min = sys.argv[2] if len(sys.argv) > 2 else ""
+raw_max = sys.argv[3] if len(sys.argv) > 3 else ""
+
+step_min = int(raw_min) if raw_min.strip() else None
+step_max = int(raw_max) if raw_max.strip() else None
+
 if not os.path.isdir(root):
     raise SystemExit(f"CKPT_ROOT not found: {root}")
 
@@ -83,6 +102,10 @@ for name in os.listdir(root):
     path = os.path.join(root, name)
     if os.path.isdir(path) and re.fullmatch(r"checkpoint-\d+", name):
         step = int(name.split("-")[-1])
+        if step_min is not None and step < step_min:
+            continue
+        if step_max is not None and step > step_max:
+            continue
         items.append((step, path))
 
 for _, path in sorted(items):

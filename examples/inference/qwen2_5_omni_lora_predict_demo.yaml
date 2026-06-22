@@ -31,7 +31,7 @@
 
 ### model
 model_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni
-adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/sft_dora_no429_noconflict2/checkpoint-2235
+adapter_name_or_path: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/grpo_SFTge85_3070/checkpoint-400
 trust_remote_code: true
 flash_attn: sdpa  # 在 PPU-ZW810E 上经实测：SDPA 比 FA2 还快 ~15%（NVIDIA 上反过来）
 
@@ -43,20 +43,20 @@ do_predict: true
 finetuning_type: lora
 
 ### dataset
-eval_dataset: test
+eval_dataset: eval
 dataset_dir: /mnt/workspace/xjz/LlamaFactory/data
 media_dir: /mnt/workspace/xjz/Audios_Datasets/WenetSpeech/DATA_UNTAR_DIRECTORY
 template: qwen2_omni
 # 与 Qwen2.5-Omni max_position_embeddings 对齐；勿用 8192，否则长音频 prompt 挤占后生成极短、易截断
 cutoff_len: 16384
-max_samples: 5
+max_samples: 50
 overwrite_cache: true
 preprocessing_num_workers: 4
 preprocessing_batch_size: 8
 dataloader_num_workers: 2
 
 ### output
-output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/predict_demo
+output_dir: /mnt/workspace/xjz/models/qwen2_5_omni-7b/lora/predict_demo_3070/400
 overwrite_output_dir: true
 report_to: none
 

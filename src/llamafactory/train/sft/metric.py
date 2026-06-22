@@ -49,8 +49,9 @@ if is_rouge_available():
 
 
 ANSWER_PATTERN = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+# 解析 user 块时兼容两种结束符：Qwen 系为 redacted_im_end，其他 chat 模板常为 im_end。
 USER_PATTERN = re.compile(
-    r"<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n",
+    r"<\|im_start\|>user\n(.*?)<\|(?:im_end|redacted_im_end)\|>\n<\|im_start\|>assistant\n",
     re.DOTALL,
 )
 
@@ -171,6 +172,10 @@ def _extract_answer(text: str) -> str:
 
 
 def _extract_raw_query(prompt: str) -> str:
+    r"""从 prompt 的 user 段取出「纠错前」ASR 文本。
+
+    约定：首行可为音频占位；下一行为任务说明（可含字面量 ``<answer>`` 等字样）；其后为待纠错转写直至 user 段结束。
+    """
     matched = USER_PATTERN.search(prompt)
     user_block = matched.group(1).strip() if matched is not None else prompt.strip()
     lines = [line for line in user_block.splitlines() if line.strip()]
@@ -188,6 +193,34 @@ def _strip_punctuation(text: str) -> str:
     return "".join(char for char in text if not unicodedata.category(char).startswith(("P", "S")))
 
 
+def _levenshtein_distance(a: str, b: str) -> int:
+    r"""Classic Levenshtein distance on Unicode codepoints (character-level for Chinese)."""
+    la, lb = len(a), len(b)
+    if la == 0:
+        return lb
+    if lb == 0:
+        return la
+    prev = list(range(lb + 1))
+    for i in range(1, la + 1):
+        cur = [i] + [0] * lb
+        ai = a[i - 1]
+        for j in range(1, lb + 1):
+            cost = 0 if ai == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[lb]
+
+
+def _cer(reference: str, hypothesis: str) -> float:
+    r"""Character Error Rate: edit distance / len(reference). Lower is better.
+
+    If reference is empty, returns 0.0 when hypothesis is also empty, else 1.0.
+    """
+    if not reference:
+        return 0.0 if not hypothesis else 1.0
+    return _levenshtein_distance(reference, hypothesis) / len(reference)
+
+
 def _average_metric_dict(metric_dicts: list[dict[str, float]]) -> dict[str, float]:
     if not metric_dicts:
         return {}
@@ -196,12 +229,14 @@ def _average_metric_dict(metric_dicts: list[dict[str, float]]) -> dict[str, floa
 
 
 def compute_correction_metrics_from_jsonl(prediction_file: str) -> dict[str, float]:
-    r"""Compute answer-only no-punctuation metrics and raw-ASR baseline from generated predictions."""
+    r"""Compute answer-only no-punctuation metrics, CER on answer, and raw-ASR baseline."""
     if not os.path.isfile(prediction_file):
         return {}
 
     before_metrics = []
     after_metrics = []
+    cer_before_list: list[float] = []
+    cer_after_list: list[float] = []
     sample_count = 0
 
     with open(prediction_file, "r", encoding="utf-8") as f:
@@ -213,6 +248,8 @@ def compute_correction_metrics_from_jsonl(prediction_file: str) -> dict[str, flo
 
             before_metrics.append(_compute_text_similarity(before, label))
             after_metrics.append(_compute_text_similarity(after, label))
+            cer_before_list.append(_cer(label, before))
+            cer_after_list.append(_cer(label, after))
             sample_count += 1
 
     before_result = _average_metric_dict(before_metrics)
@@ -224,5 +261,12 @@ def compute_correction_metrics_from_jsonl(prediction_file: str) -> dict[str, flo
         result[f"predict_before_correction_no_punct_{metric_name}"] = before_result[metric_name]
         result[f"predict_answer_no_punct_{metric_name}"] = after_result[metric_name]
         result[f"predict_improvement_no_punct_{metric_name}"] = after_result[metric_name] - before_result[metric_name]
+
+    if sample_count:
+        mean_before_cer = float(np.mean(cer_before_list))
+        mean_after_cer = float(np.mean(cer_after_list))
+        result["predict_before_correction_answer_cer"] = round(mean_before_cer, 6)
+        result["predict_answer_cer"] = round(mean_after_cer, 6)
+        result["predict_improvement_answer_cer"] = round(mean_before_cer - mean_after_cer, 6)
 
     return result
